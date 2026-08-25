@@ -261,4 +261,13 @@ v0.1.0. Extracted from a production multi-agent deployment (9 agents, ~340
 lessons, several months) where every design rule above was learned by
 violating it first. No external dependencies; Node ≥ 20.
 
+## Related projects
+
+Murphys Law is part of a family of agent-fleet coordination primitives
+distilled from the same production system:
+
+- [relay-ledger](https://github.com/LowCode191/relay-ledger) — exactly-once
+  completion observation for multi-agent fleets: dispatch, death, salvage,
+  reconcile.
+
 MIT © LowCode191
