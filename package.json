@@ -25,7 +25,8 @@
     "eval/",
     "data/sample-lessons.jsonl",
     "data/projects.example.json",
-    "assets/banner.svg"
+    "assets/banner.svg",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "node --test",
