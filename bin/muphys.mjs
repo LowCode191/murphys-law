@@ -388,7 +388,7 @@ switch (command) {
       if (!replacement) {
         issues.push(`dangling superseded_by pointer: ${lesson.id} -> ${lesson.superseded_by}`);
       } else if (replacement.status === "superseded" || replacement.status === "deprecated") {
-        issues.push(`superseded_by points at a retired lesson: ${lesson.id} -> ${lesson.superseded_by} (chains/cycles; re-point at the active replacement)`);
+        issues.push(`superseded_by points at a retired lesson: ${lesson.id} -> ${lesson.superseded_by} (a chain; re-point it: murphys supersede --ids ${lesson.id} --superseded-by <active id> --reason "...")`);
       }
     }
     // Outcome telemetry finally feeds curation: an ACTIVE lesson that keeps
