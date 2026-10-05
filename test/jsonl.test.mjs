@@ -54,7 +54,7 @@ test("other logs get the same guard: a usage log missing its final newline still
 test("a UTF-8 BOM never hides the first register row", () => {
   const home = freshHome();
   const rows = [ROW_A, { ...ROW_A, id: "llg-jsonl-b", title: "Second row" }];
-  fs.writeFileSync(path.join(home, "lessons.jsonl"), "﻿" + rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  fs.writeFileSync(path.join(home, "lessons.jsonl"), "\uFEFF" + rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
   assert.equal(cli(home, ["stats"]).register.total, 2);
   const result = cli(home, ["query", "hand edited lesson"]);
   assert.ok(result.lessons.some((l) => l.id === "llg-jsonl-a"), "the BOM-prefixed first row is queryable");
@@ -64,8 +64,8 @@ test("a UTF-8 BOM in projects.json and in a project's lessons file does not brea
   const home = freshHome();
   const project = path.join(home, "proj");
   fs.mkdirSync(project);
-  fs.writeFileSync(path.join(home, "projects.json"), "﻿" + JSON.stringify({ projects: [{ slug: "bom", root: project }] }));
-  fs.writeFileSync(path.join(project, "LESSONS-LEARNED.jsonl"), "﻿" + JSON.stringify({ title: "BOM lesson", description: "First line of a BOM file." }) + "\n");
+  fs.writeFileSync(path.join(home, "projects.json"), "\uFEFF" + JSON.stringify({ projects: [{ slug: "bom", root: project }] }));
+  fs.writeFileSync(path.join(project, "LESSONS-LEARNED.jsonl"), "\uFEFF" + JSON.stringify({ title: "BOM lesson", description: "First line of a BOM file." }) + "\n");
   const result = cli(home, ["sync"]);
   assert.equal(result.totalAppended, 1);
   assert.equal(result.projects[0].invalid, 0, "the BOM-prefixed first line is a valid lesson");
