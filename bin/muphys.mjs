@@ -173,6 +173,7 @@ switch (command) {
       // GLUED to the last token is content ("service tier is A-" ≠ "... A").
       .replace(/\s[-\s]+$/, "")
       .trim();
+    const planDedupe = () => {
     const active = core.readRegister().filter((lesson) => lesson.status !== "superseded" && lesson.status !== "deprecated");
 
     const exactGroups = new Map();
@@ -217,15 +218,25 @@ switch (command) {
       if (new Set(members.map(exactKey)).size < 2) continue;
       candidates.push({ ids: members.map((m) => m.id), members: members.map((m) => ({ id: m.id, title: m.title, description: preview(m.description) })) });
     }
+    return { plans, candidates };
+    };
 
     if (args.apply !== true) {
+      const { plans, candidates } = planDedupe();
       out({ dryRun: true, wouldRetire: plans, reviewCandidates: candidates });
       break;
     }
-    for (const plan of plans) {
-      await core.callTool("lessons_supersede", { ids: [plan.retire], supersededBy: plan.keeper, reason: "exact-duplicate-content (murphys dedupe)" });
-    }
-    out({ retired: plans.length, reviewCandidates: candidates });
+    // Plan and apply under ONE lock hold, in ONE rewrite: a plan computed
+    // outside the lock could be stale by the time it is applied, and
+    // per-plan rewrites multiplied the window concurrent writers raced.
+    const applied = core.withRegisterLock(() => {
+      const fresh = planDedupe();
+      if (fresh.plans.length) {
+        core.supersedeMany(fresh.plans.map((plan) => ({ ids: [plan.retire], supersededBy: plan.keeper, reason: "exact-duplicate-content (murphys dedupe)" })));
+      }
+      return fresh;
+    });
+    out({ retired: applied.plans.length, reviewCandidates: applied.candidates });
     break;
   }
 
@@ -301,91 +312,31 @@ switch (command) {
       }
     }
     if (args["dry-run"] !== true && toAppend.length) {
-      // Single-writer lock — best-effort serialization, NOT the correctness
-      // gate. POSIX offers no compare-and-swap on paths, so every judge-
-      // then-mutate lock protocol has some residual window (our own stress
-      // test caught the previous rm-based reap deleting a winner's FRESH
-      // lock: read-judge-dead, then rm hits a lock that was replaced in the
-      // gap). Correctness therefore rests on two structural facts instead:
-      // sync rows are pure functions of source content (a double-append
-      // writes byte-identical rows — no wall clock rides in a durable row)
-      // and readRegister collapses duplicate ids at read time (first wins),
-      // so a lost race is a no-op at every read site. The lock's job is to
-      // make that rare, not impossible.
-      //
-      // Protocol: O_EXCL create is the front door; a lock naming a LIVE pid
-      // is never touched. A dead lock is reaped by RENAME-CLAIM: rename the
-      // lock to a private tombstone (one winner per inode — a losing reaper
-      // gets ENOENT and can no longer delete anything it didn't judge),
-      // re-judge the CLAIMED content, and if it turns out live (yanked a
-      // fresh lock inside the read-judge gap) restore it with a no-clobber
-      // link and skip this run — failing toward safety.
-      const lockPath = path.join(core.MURPHYS_HOME, ".sync.lock");
-      const tryLock = () => {
-        try {
-          fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, ts: new Date().toISOString() }), { flag: "wx", mode: 0o600 });
-          return true;
-        } catch {
-          return false;
-        }
-      };
-      const acquireLock = () => {
-        if (tryLock()) return true;
-        let holderAlive = true;
-        try {
-          const holder = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-          try {
-            process.kill(Number(holder.pid), 0);
-          } catch {
-            holderAlive = false;
-          }
-        } catch {
-          holderAlive = false; // unreadable/legacy lock artifact: treat as dead
-        }
-        if (holderAlive) return false;
-        const tomb = `${lockPath}.reap.${process.pid}`;
-        try {
-          fs.renameSync(lockPath, tomb); // claim: exactly one reaper wins this inode
-        } catch {
-          return tryLock(); // another reaper claimed it first; contend fresh
-        }
-        let claimedAlive = false;
-        try {
-          const claimed = JSON.parse(fs.readFileSync(tomb, "utf8"));
-          process.kill(Number(claimed.pid), 0);
-          claimedAlive = true;
-        } catch { /* unreadable or dead = reapable */ }
-        if (claimedAlive) {
-          // We yanked a FRESH lock created inside our read-judge gap.
-          // Restore without clobbering any newer lock, and skip this run.
-          try { fs.linkSync(tomb, lockPath); } catch { /* newer lock exists; reader-side id collapse absorbs the holder's now-unserialized append */ }
-          try { fs.rmSync(tomb, { force: true }); } catch { /* best effort */ }
-          return false;
-        }
-        try { fs.rmSync(tomb, { force: true }); } catch { /* best effort */ }
-        return tryLock(); // one O_EXCL winner among fresh contenders
-      };
-      if (!acquireLock()) {
-        out({ skipped: true, reason: "another sync holds the lock", lock: lockPath });
+      // The register lock (shared with every other writer — see
+      // withRegisterLock in lib/register.cjs) is best-effort serialization,
+      // NOT the correctness gate for sync: POSIX offers no compare-and-swap
+      // on paths. Correctness rests on two structural facts: sync rows are
+      // pure functions of source content (a raced double-append writes
+      // byte-identical rows — no wall clock rides in a durable row) and
+      // readRegister collapses duplicate ids at read time (first wins), so a
+      // lost race is a no-op at every read site. Sync never waits: a held
+      // lock means another writer is active, and the next run picks up
+      // whatever this one skipped.
+      let stillNew;
+      try {
+        stillNew = core.withRegisterLock(() => {
+          // Re-check ids under the lock — a racing sync may have won.
+          const current = new Set(core.readRegister().map((l) => l.id));
+          const fresh = toAppend.filter((line) => !current.has(JSON.parse(line).id));
+          if (fresh.length) core.appendLine(core.REGISTER_JSONL, fresh.join("\n"));
+          return fresh;
+        }, { wait: false });
+      } catch (error) {
+        if (error.code !== "EREGISTERLOCKED") throw error;
+        out({ skipped: true, reason: "another writer holds the register lock", lock: core.REGISTER_LOCK });
         break;
       }
-      try {
-        // Re-check ids under the lock — the racing sync may have won.
-        const current = new Set(core.readRegister().map((l) => l.id));
-        const stillNew = toAppend.filter((line) => !current.has(JSON.parse(line).id));
-        if (stillNew.length) core.appendLine(core.REGISTER_JSONL, stillNew.join("\n"));
-        out({ dryRun: false, totalAppended: stillNew.length, syncedAt: now, projects: summary });
-      } finally {
-        // Ownership-proved release: remove the lock only if it provably
-        // names THIS pid. If ours was yanked and replaced by another
-        // contender's, a blind rm here would delete THEIR lock and cascade
-        // a second unserialized writer. Unreadable or missing = not
-        // provably ours = leave it (an unreadable lock is judged dead by
-        // the next contender's reap, so nothing deadlocks).
-        try {
-          if (Number(JSON.parse(fs.readFileSync(lockPath, "utf8")).pid) === process.pid) fs.rmSync(lockPath, { force: true });
-        } catch { /* not provably ours — leave it */ }
-      }
+      out({ dryRun: false, totalAppended: stillNew.length, syncedAt: now, projects: summary });
       break;
     }
     out({ dryRun: args["dry-run"] === true, totalAppended: 0, syncedAt: now, projects: summary });

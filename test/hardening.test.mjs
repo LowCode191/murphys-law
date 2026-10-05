@@ -76,14 +76,14 @@ test("dedupe never groups non-Latin lessons on empty fold keys", async () => {
 test("sync respects a held lock and appends nothing", async () => {
   fs.writeFileSync(path.join(HOME, "projects.json"), JSON.stringify({ projects: [{ slug: "demo", root: HOME }] }));
   fs.writeFileSync(path.join(HOME, "LESSONS-LEARNED.jsonl"), JSON.stringify({ title: "Sync lesson", description: "A lesson captured at the project." }) + "\n");
-  fs.writeFileSync(path.join(HOME, ".sync.lock"), JSON.stringify({ pid: process.pid, ts: new Date().toISOString() }));
+  fs.writeFileSync(core.REGISTER_LOCK, JSON.stringify({ pid: process.pid, ts: new Date().toISOString() }));
   try {
     const before_ = core.readRegister().length;
     const result = JSON.parse(cli(["sync"]));
     assert.equal(result.skipped, true);
     assert.equal(core.readRegister().length, before_, "no append under a held lock");
   } finally {
-    fs.rmSync(path.join(HOME, ".sync.lock"), { force: true });
+    fs.rmSync(core.REGISTER_LOCK, { force: true });
   }
   const applied = JSON.parse(cli(["sync"]));
   assert.equal(applied.totalAppended, 1, "sync proceeds once the lock is free");
@@ -153,7 +153,7 @@ test("sync: concurrent runs against a STALE lock never write duplicate ids", asy
   fs.writeFileSync(path.join(raceHome, "LESSONS-LEARNED.jsonl"),
     JSON.stringify({ title: "Race lesson one", description: "First lesson for the race test." }) + "\n" +
     JSON.stringify({ title: "Race lesson two", description: "Second lesson for the race test." }) + "\n");
-  const staleLock = path.join(raceHome, ".sync.lock");
+  const staleLock = path.join(raceHome, ".lessons.jsonl.lock");
   fs.writeFileSync(staleLock, JSON.stringify({ pid: 999999999, ts: "2026-01-01T00:00:00Z" }));
   const { execFile } = await import("node:child_process");
   const run = () => new Promise((resolve) => execFile("node", [CLI, "sync"], { env: { ...process.env, MURPHYS_HOME: raceHome } }, () => resolve()));
@@ -448,7 +448,7 @@ test("round 7.4: a live foreign lock is respected AND survives the run — no bl
   fs.writeFileSync(path.join(home, "projects.json"), JSON.stringify({ projects: [{ slug: "lk", root: home }] }));
   fs.writeFileSync(path.join(home, "LESSONS-LEARNED.jsonl"),
     JSON.stringify({ title: "Lock test lesson", description: "Body for the lock test." }) + "\n");
-  const lockPath = path.join(home, ".sync.lock");
+  const lockPath = path.join(home, ".lessons.jsonl.lock");
   // This test process's pid IS alive — the sync child must treat the lock as
   // held, skip, and leave the file untouched.
   const foreign = JSON.stringify({ pid: process.pid, ts: "2026-01-01T00:00:00Z" });
