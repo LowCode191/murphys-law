@@ -174,7 +174,7 @@ test("hybrid retrieval re-ranks a paraphrase the lexical scorer gets wrong", asy
   }
 });
 
-test("embedding vectors are cached: a repeat query costs zero new embedding calls", async () => {
+test("lesson vectors are cached: a repeat query re-embeds only the query text", async () => {
   const { server, state, port } = await startFakeEmbeddings();
   try {
     const env = {
@@ -188,7 +188,7 @@ test("embedding vectors are cached: a repeat query costs zero new embedding call
     assert.ok(afterFirst >= 4, "first run embeds the query and the register");
     const second = JSON.parse(await runCli(["query", PARAPHRASE], env));
     assert.equal(second.retriever, "hybrid");
-    assert.equal(state.embedded, afterFirst, "second run must be served entirely from the cache");
+    assert.equal(state.embedded, afterFirst + 1, "second run embeds the query only; every lesson vector comes from the cache");
   } finally {
     server.close();
   }
@@ -279,11 +279,14 @@ test("a poisoned cache row is treated as missing and re-fetched, not served", as
   try {
     const home = freshHome("murphys-r1heal-");
     seedRegister(home, [{ id: "llg-heallesson1", title: "Confirm the fix is live in production", description: "verified live in production", status: "active", tags: ["ops"] }]);
-    // Poison the cache for the QUERY text under this model before any run.
+    // Poison the cached vector for the LESSON under this endpoint, model and
+    // dimension before any run (query vectors are never persisted).
     const crypto = await import("node:crypto");
-    const key = crypto.createHash("sha256").update(JSON.stringify(["heal-model", PARAPHRASE])).digest("hex");
-    fs.writeFileSync(path.join(home, "embeddings-cache.jsonl"), JSON.stringify({ k: key, v: [null, "x"] }) + "\n");
-    const env = { ...process.env, MURPHYS_HOME: home, MURPHYS_EMBEDDINGS_URL: `http://127.0.0.1:${port}/v1/embeddings`, MURPHYS_EMBEDDINGS_MODEL: "heal-model" };
+    const url = `http://127.0.0.1:${port}/v1/embeddings`;
+    const lessonText = "Confirm the fix is live in production\nverified live in production\nops";
+    const key = crypto.createHash("sha256").update(JSON.stringify([url, "heal-model", 3, lessonText])).digest("hex");
+    fs.writeFileSync(path.join(home, "embeddings-cache.jsonl"), JSON.stringify({ k: key, v: [null, "x", 1] }) + "\n");
+    const env = { ...process.env, MURPHYS_HOME: home, MURPHYS_EMBEDDINGS_URL: url, MURPHYS_EMBEDDINGS_MODEL: "heal-model" };
     const result = JSON.parse(await runCli(["query", PARAPHRASE], env));
     assert.equal(result.retriever, "hybrid", "the poisoned row heals via re-fetch instead of failing the pass");
     assert.ok(state.embedded >= 2, "query and lesson were re-embedded despite the cache file existing");
