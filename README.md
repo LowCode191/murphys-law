@@ -95,10 +95,19 @@ For Claude Code, add to **`~/.claude/settings.json`** (user scope):
 ```
 
 Every prompt is scored against the register; when a lesson clears the
-relevance gates it's injected as a clearly-framed background block (with date
-and status, markup-folded so register content can never act as instructions).
-Per-session dedupe, rate caps, and a no-ranking-slide rule keep it quiet;
-scope it with `MURPHYS_HOOK_CWD_FILTER` if you only want it in some trees.
+relevance gates it's injected as a clearly-framed background block, with each
+lesson's date and status. Per-session dedupe, rate caps, and a no-ranking-slide
+rule keep it quiet; scope it with `MURPHYS_HOOK_CWD_FILTER` if you only want it
+in some trees.
+
+**Injected lessons are text in front of your agent — treat the register as
+trusted input.** The block frames lessons as background data rather than
+instructions, and folds angle brackets so a lesson can't close the wrapper.
+That reduces prompt-injection risk; it does not eliminate it — a lesson can
+still say "always run X" in plain words, and a model may follow it. So the
+writers that bypass curation are fenced: lessons synced from project files
+land `unreviewed` and are injected only inside their own project until a
+curator runs `murphys review` (see [Project-scoped lessons](#project-scoped-lessons)).
 
 **Mounting matters — verify by effect.** Some agent harnesses spawn Claude
 Code with `--setting-sources user`, which silently ignores project-scope
@@ -212,6 +221,17 @@ node bin/muphys.mjs sync
 Content-derived ids make the sync idempotent and stateless; records land
 scoped `project:<slug>`. Never rename a slug (ids derive from it).
 
+Synced rows land with `status: "unreviewed"`: whoever can write to a project's
+file wrote them, and no curator has looked yet. `lessons_query` returns them
+(with the status visible), but the recall hook injects them only into sessions
+whose working directory is inside that project's registered root. A curator
+promotes them:
+
+```bash
+node bin/muphys.mjs review --project my-app        # every unreviewed row of a project
+node bin/muphys.mjs review --ids llp-abc123 --by me # specific rows; --dry-run to preview
+```
+
 ## Design rules (each one paid for)
 
 1. **Explicit ids at write time.** Position-derived ids break every
@@ -222,9 +242,11 @@ scoped `project:<slug>`. Never rename a slug (ids derive from it).
    worse than no guidance.
 3. **Every query and injection is logged.** Retrieval you can't observe is
    retrieval you can't improve — and it's how you run the eval.
-4. **Injected content is data, not instructions.** The block says so, shows
-   each lesson's date and status, and angle-brackets are folded so a poisoned
-   lesson can't escape the wrapper.
+4. **Injected content is framed as data, not instructions.** The block says
+   so, shows each lesson's date and status, and angle-brackets are folded so a
+   poisoned lesson can't escape the wrapper. Framing reduces injection risk; it
+   doesn't remove it, so uncurated writers (project sync) stay fenced to their
+   own project until reviewed.
 5. **Fail-open + external liveness.** The hook must never block a prompt, so
    its failure mode is silence — which is why `murphys doctor` exists and why
    you verify installs by effect.

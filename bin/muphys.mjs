@@ -7,7 +7,9 @@
 //   murphys supersede --ids id1,id2 --superseded-by idX --reason "..."
 //   murphys deprecate --ids id1,id2 --reason "..."
 //   murphys dedupe [--apply]        byte-identical duplicates -> superseded; near-matches reported for review
-//   murphys sync [--dry-run]        pull project LESSONS-LEARNED.jsonl files in
+//   murphys sync [--dry-run]        pull project LESSONS-LEARNED.jsonl files in (as unreviewed)
+//   murphys review --ids a,b | --project slug [--by name] [--dry-run]
+//                                   curator sign-off: unreviewed -> active
 //   murphys doctor                  integrity + liveness checks
 //   murphys stats [--by-lesson]     register/funnel counts + outcome rollup
 //   murphys mcp                     run the stdio MCP server (npx-mountable)
@@ -257,7 +259,7 @@ switch (command) {
     const summary = [];
     const toAppend = [];
     for (const project of projects) {
-      const slug = String(project.slug).toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+      const slug = core.projectSlug(project.slug);
       const root = path.resolve(project.root);
       const file = path.resolve(root, project.file || "LESSONS-LEARNED.jsonl");
       const row = { project: slug, file, scanned: 0, appended: 0, duplicates: 0, invalid: 0 };
@@ -305,7 +307,9 @@ switch (command) {
           tags: [...new Set([...(Array.isArray(entry.tags) ? entry.tags.filter(Boolean).map(String) : []), slug])].slice(0, 20),
           scope: `project:${slug}`,
           project: slug,
-          status: "active",
+          // Written by whoever can write to the project's file, with no
+          // curator in between: unreviewed until `murphys review`.
+          status: "unreviewed",
           source: `project-sync:${slug}#L${index + 1}`,
         }));
         row.appended += 1;
@@ -340,6 +344,19 @@ switch (command) {
       break;
     }
     out({ dryRun: args["dry-run"] === true, totalAppended: 0, syncedAt: now, projects: summary });
+    break;
+  }
+
+  case "review": {
+    // Curator sign-off for synced project lessons (unreviewed -> active).
+    const ids = args.ids ? String(args.ids).split(",").map((s) => s.trim()).filter(Boolean) : [];
+    if (!ids.length && !args.project) fail("--ids or --project is required");
+    out(core.markReviewed({
+      ids,
+      project: args.project ? String(args.project) : null,
+      reviewer: args.by ? String(args.by) : null,
+      dryRun: args["dry-run"] === true,
+    }));
     break;
   }
 
@@ -429,7 +446,8 @@ switch (command) {
         issues.push(`hook is mounted but no injection log exists at ${injLog} — it has never fired. Verify by EFFECT: send a real prompt and watch this file. Reading settings back proves nothing (some harnesses never load the scope you installed into).`);
       }
     }
-    out({ register: { total: rows.length, active: core.activeLessons().length, duplicateIdLines, unparseableLines: unparseable.length }, issues, ok: issues.length === 0 });
+    const unreviewed = rows.filter((lesson) => lesson.status === "unreviewed").length;
+    out({ register: { total: rows.length, active: core.activeLessons().length, unreviewed, duplicateIdLines, unparseableLines: unparseable.length }, issues, ok: issues.length === 0 });
     process.exit(issues.length ? 1 : 0);
     break;
   }
@@ -440,7 +458,7 @@ switch (command) {
     const { totals, perLesson } = outcomeRollup();
     const result = {
       home: core.MURPHYS_HOME,
-      register: { total: core.readRegister().length, active: core.activeLessons().length },
+      register: { total: core.readRegister().length, active: core.activeLessons().length, unreviewed: core.readRegister().filter((lesson) => lesson.status === "unreviewed").length },
       queries: count(core.QUERIES_JSONL),
       applications: count(core.USAGE_JSONL),
       candidates: count(core.CANDIDATES_JSONL),
@@ -473,7 +491,7 @@ switch (command) {
   default:
     console.error(`murphys — lessons register CLI
 
-  add | query | supersede | deprecate | dedupe | sync | doctor | stats
+  add | query | supersede | deprecate | dedupe | sync | review | doctor | stats
 
 Data home: ${core.MURPHYS_HOME}  (override with MURPHYS_HOME)
 MCP server: node lib/register.cjs   (stdio)

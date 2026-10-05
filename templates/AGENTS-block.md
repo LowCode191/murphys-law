@@ -21,6 +21,8 @@ hook (push) is the reliable delivery path. Ship both.
 - When working inside a registered project, you may also capture
   project-scoped lessons by appending to `<project-root>/LESSONS-LEARNED.jsonl`
   (one JSON object per line: `{title, description, [date], [tags],
-  [evidence]}`); `murphys sync` feeds them into the register deterministically.
+  [evidence]}`); `murphys sync` feeds them into the register deterministically, as
+  `unreviewed` rows that are injected only inside that project until a curator
+  runs `murphys review`.
 - If the lessons tools are missing or denied, say so explicitly in your final
   response so the tool-surface gap is visible.

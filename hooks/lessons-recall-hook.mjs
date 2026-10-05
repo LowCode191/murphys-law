@@ -73,6 +73,43 @@ const CWD_FILTER = (() => {
   }
 })();
 
+// Synced project lessons arrive "unreviewed": anyone who can write to that
+// project's LESSONS-LEARNED.jsonl wrote them, with no curator in between.
+// Until `murphys review` marks them active they are injected only into
+// sessions whose cwd is inside that project's registered root.
+let projectRoots = null;
+function projectRootFor(slug) {
+  if (!projectRoots) {
+    projectRoots = new Map();
+    try {
+      const registry = JSON.parse(core.readText(core.PROJECTS_JSON));
+      for (const project of Array.isArray(registry.projects) ? registry.projects : []) {
+        if (project && project.slug && project.root) projectRoots.set(core.projectSlug(project.slug), path.resolve(String(project.root)));
+      }
+    } catch { /* no registry: unreviewed lessons are never injected */ }
+  }
+  return typeof slug === "string" ? projectRoots.get(slug) || null : null;
+}
+
+function isInside(child, parent) {
+  return child === parent || child.startsWith(parent.endsWith(path.sep) ? parent : parent + path.sep);
+}
+
+function realOrSelf(target) {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    return target;
+  }
+}
+
+function cwdInsideProject(cwd, slug) {
+  const root = projectRootFor(slug);
+  if (!root || !cwd) return false;
+  const resolved = path.resolve(cwd);
+  return isInside(resolved, root) || isInside(realOrSelf(resolved), realOrSelf(root));
+}
+
 function armForSession(sessionId, treatFraction) {
   const digest = crypto.createHash("sha256").update(`murphys-recall|${sessionId}`).digest();
   return digest.readUInt32BE(0) / 0xffffffff < treatFraction ? "treat" : "control";
@@ -110,6 +147,7 @@ function main() {
 
   const scored = [];
   for (const lesson of core.activeLessons()) {
+    if (lesson.status === "unreviewed" && !cwdInsideProject(cwd, lesson.project)) continue;
     const score = core.scoreLessonForQuery(lesson, prompt, []);
     if (score < MIN_SCORE) continue;
     const lessonTerms = core.searchTerms([
