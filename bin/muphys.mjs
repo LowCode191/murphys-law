@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // murphys — CLI for the lessons register.
 //
-//   murphys add --title "..." --description "..." [--tags a,b] [--evidence x]
+//   murphys add --title "..." --description "..." [--tags a,b] [--evidence x]...
 //              [--project slug] [--author name] [--date YYYY-MM-DD]
 //   murphys query "<text>" [--tags a,b] [--limit N]
-//   murphys supersede --ids id1,id2 --superseded-by idX --reason "..."
-//   murphys deprecate --ids id1,id2 --reason "..."
+//   murphys supersede --ids id1,id2 --superseded-by idX --reason "..." [--dry-run]
+//   murphys deprecate --ids id1,id2 --reason "..." [--dry-run]
 //   murphys dedupe [--apply]        byte-identical duplicates -> superseded; near-matches reported for review
 //   murphys sync [--dry-run]        pull project LESSONS-LEARNED.jsonl files in (as unreviewed)
 //   murphys review --ids a,b | --project slug [--by name] [--dry-run]
@@ -13,6 +13,10 @@
 //   murphys doctor                  integrity + liveness checks
 //   murphys stats [--by-lesson]     register/funnel counts + outcome rollup
 //   murphys mcp                     run the stdio MCP server (npx-mountable)
+//
+// Flags take `--name value` or `--name=value`; a flag that needs a value
+// takes the next token verbatim, even one starting with "--". Errors print
+// one line; set DEBUG=1 for the stack.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -26,21 +30,72 @@ const core = require(path.join(path.dirname(fileURLToPath(import.meta.url)), "..
 
 const [, , command, ...rest] = process.argv;
 
-function parseArgs(argv) {
+const USAGE = `murphys — lessons register CLI
+
+  add        --title T --description D [--tags a,b] [--evidence X]... [--project slug] [--author name] [--date YYYY-MM-DD]
+  query      [text...] [--tags a,b] [--limit N]
+  supersede  --ids a,b --superseded-by ID --reason R [--dry-run]
+  deprecate  --ids a,b --reason R [--dry-run]
+  dedupe     [--apply]
+  sync       [--dry-run]
+  review     --ids a,b | --project slug [--by name] [--dry-run]
+  doctor
+  stats      [--by-lesson]
+  mcp        run the stdio MCP server (what \`npx -y murphys-law mcp\` mounts)
+
+Flags accept --name value or --name=value. DEBUG=1 prints stack traces.
+Data home: ${core.MURPHYS_HOME}  (override with MURPHYS_HOME)
+Recall hook: hooks/lessons-recall-hook.mjs  (Claude Code UserPromptSubmit)`;
+
+// Per-command flags. A flag missing here is a usage error — a mistyped flag
+// used to be silently accepted and ignored.
+const FLAGS = {
+  add: { values: ["title", "description", "tags", "evidence", "project", "author", "date"], repeatable: ["evidence"] },
+  query: { values: ["tags", "limit"] },
+  supersede: { values: ["ids", "superseded-by", "reason"], booleans: ["dry-run"] },
+  deprecate: { values: ["ids", "superseded-by", "reason"], booleans: ["dry-run"] },
+  dedupe: { booleans: ["apply"] },
+  sync: { booleans: ["dry-run"] },
+  review: { values: ["ids", "project", "by"], booleans: ["dry-run"] },
+  doctor: {},
+  stats: { booleans: ["by-lesson"] },
+  mcp: {},
+};
+
+class UsageError extends Error {}
+
+function parseArgs(argv, spec) {
+  const values = new Set(spec.values || []);
+  const repeatable = new Set(spec.repeatable || []);
+  const booleans = new Set([...(spec.booleans || []), "help"]);
   const args = { _: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
-    if (token.startsWith("--")) {
-      const key = token.slice(2);
-      const next = argv[i + 1];
-      if (next === undefined || next.startsWith("--")) {
-        args[key] = true;
-      } else {
-        args[key] = next;
-        i += 1;
-      }
-    } else {
+    if (token === "--") {
+      args._.push(...argv.slice(i + 1));
+      break;
+    }
+    if (!token.startsWith("--")) {
       args._.push(token);
+      continue;
+    }
+    const eq = token.indexOf("=");
+    const name = eq === -1 ? token.slice(2) : token.slice(2, eq);
+    if (values.has(name)) {
+      let value;
+      if (eq !== -1) {
+        value = token.slice(eq + 1);
+      } else {
+        if (i + 1 >= argv.length) throw new UsageError(`--${name} needs a value`);
+        value = argv[++i]; // verbatim, even if it starts with "--"
+      }
+      if (repeatable.has(name)) (args[name] ||= []).push(value);
+      else args[name] = value;
+    } else if (booleans.has(name)) {
+      if (eq !== -1 && !["true", "false"].includes(token.slice(eq + 1))) throw new UsageError(`--${name} takes no value`);
+      args[name] = eq === -1 || token.slice(eq + 1) === "true";
+    } else {
+      throw new UsageError(`unknown option --${name} for "${command}" (see murphys --help)`);
     }
   }
   return args;
@@ -51,12 +106,36 @@ function out(value) {
 }
 
 function fail(message) {
-  console.error(`murphys: ${message}`);
+  throw new UsageError(message);
+}
+
+function finish(error) {
+  const debug = process.env.DEBUG && !["0", "false"].includes(process.env.DEBUG);
+  console.error(`murphys: ${error?.message || String(error)}`);
+  if (debug && error?.stack) console.error(error.stack);
+  process.exit(error instanceof UsageError ? 2 : 1);
+}
+
+if (!command || command === "--help" || command === "-h" || command === "help") {
+  console.error(USAGE);
+  process.exit(0);
+}
+if (!FLAGS[command]) {
+  console.error(`murphys: unknown command "${command}"\n\n${USAGE}`);
   process.exit(2);
 }
 
-const args = parseArgs(rest);
-if (command && command !== "mcp") core.printMigrationNoticeOnce(); // the MCP server prints its own
+let args;
+try {
+  args = parseArgs(rest, FLAGS[command]);
+} catch (error) {
+  finish(error);
+}
+if (args.help) {
+  console.error(USAGE);
+  process.exit(0);
+}
+if (command !== "mcp") core.printMigrationNoticeOnce(); // the MCP server prints its own
 
 function outcomeRollup() {
   // Per-lesson effectiveness from the apply log: the funnel's last hop,
@@ -82,6 +161,7 @@ function outcomeRollup() {
 }
 
 
+async function main() {
 switch (command) {
   case "add": {
     if (!args.title || !args.description) fail("--title and --description are required");
@@ -91,7 +171,7 @@ switch (command) {
         description: String(args.description),
         date: args.date ? String(args.date) : undefined,
         tags: args.tags ? String(args.tags).split(",").map((t) => t.trim()).filter(Boolean) : [],
-        evidence: args.evidence ? [String(args.evidence)] : [],
+        evidence: args.evidence ? args.evidence.map(String) : [],
         project: args.project ? String(args.project) : undefined,
       }],
     });
@@ -498,12 +578,8 @@ switch (command) {
   }
 
   default:
-    console.error(`murphys — lessons register CLI
-
-  add | query | supersede | deprecate | dedupe | sync | review | doctor | stats
-
-Data home: ${core.MURPHYS_HOME}  (override with MURPHYS_HOME)
-MCP server: node lib/register.cjs   (stdio)
-Recall hook: hooks/lessons-recall-hook.mjs  (Claude Code UserPromptSubmit)`);
-    process.exit(command ? 2 : 0);
+    fail(`unknown command "${command}"`);
 }
+}
+
+main().catch(finish);

@@ -51,8 +51,8 @@ const INJECTION_LOG = core.INJECTIONS_JSONL;
 const EXPERIMENT_PATH = path.join(MURPHYS_HOME, "experiment.json");
 
 // Gate policy (hook-side; the scorer itself is shared with lessons_query).
-const MIN_SCORE = Number(core.envValue("HOOK_MIN_SCORE") || 8);
-const MIN_TERMS = Number(core.envValue("HOOK_MIN_TERMS") || 3);
+const MIN_SCORE = core.numberEnv("HOOK_MIN_SCORE", 8);
+const MIN_TERMS = core.numberEnv("HOOK_MIN_TERMS", 3, { min: 1, integer: true });
 const MAX_LESSONS = 3;
 const MAX_BLOCK_CHARS = 1400;
 const MAX_TITLE_CHARS = 160;
