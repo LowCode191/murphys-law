@@ -91,12 +91,16 @@
 - `MURPHYS_LOCK_WAIT_MS` and `MURPHYS_LOCK_STALE_MS`.
 - `SECURITY.md`, `CONTRIBUTING.md`, and a CI workflow (Node 22 and 24).
 
-### Known issue
+### Fixed (MCP output)
 
-- The MCP stdio server exits as soon as its request queue settles after
-  stdin closes. A client that closes stdin before reading a large response
-  can receive it cut off at the OS pipe buffer. MCP clients that keep stdin
-  open are unaffected.
+- The stdio server no longer exits with output still buffered when a client
+  closes stdin early; previously a large response could arrive cut off at the
+  OS pipe buffer (64 KiB).
+- `lessons_query` responses are capped at 60,000 characters: lower-ranked
+  lessons are dropped whole and reported as `truncated` / `omitted` / `note`.
+  Titles are cut at 300 characters, evidence at 8 entries of 300 characters
+  (plus an "N more evidence entries omitted" marker), and no string in any tool
+  response exceeds 2,000 characters. Every cut carries `…[truncated]`.
 
 ## 0.3.0 — 2026-08-19
 
