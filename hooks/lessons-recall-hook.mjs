@@ -47,12 +47,12 @@ const core = require(path.join(path.dirname(fileURLToPath(import.meta.url)), "..
 
 const MURPHYS_HOME = core.MURPHYS_HOME;
 const STATE_DIR = path.join(MURPHYS_HOME, "hook-state");
-const INJECTION_LOG = path.resolve(process.env.MURPHYS_INJECTION_LOG || path.join(MURPHYS_HOME, "injections.jsonl"));
+const INJECTION_LOG = core.INJECTIONS_JSONL;
 const EXPERIMENT_PATH = path.join(MURPHYS_HOME, "experiment.json");
 
 // Gate policy (hook-side; the scorer itself is shared with lessons_query).
-const MIN_SCORE = Number(process.env.MURPHYS_HOOK_MIN_SCORE || 8);
-const MIN_TERMS = Number(process.env.MURPHYS_HOOK_MIN_TERMS || 3);
+const MIN_SCORE = Number(core.envValue("HOOK_MIN_SCORE") || 8);
+const MIN_TERMS = Number(core.envValue("HOOK_MIN_TERMS") || 3);
 const MAX_LESSONS = 3;
 const MAX_BLOCK_CHARS = 1400;
 const MAX_TITLE_CHARS = 160;
@@ -67,9 +67,10 @@ const MIN_PROMPT_CHARS = 40; // "ok", "continue" never trigger recall
 // resolves to match-nothing: a broken scoping filter scopes to nothing, and
 // `murphys doctor`'s liveness check surfaces the resulting silence.
 const CWD_FILTER = (() => {
-  if (!process.env.MURPHYS_HOOK_CWD_FILTER) return null;
+  const pattern = core.envValue("HOOK_CWD_FILTER");
+  if (!pattern) return null;
   try {
-    return new RegExp(process.env.MURPHYS_HOOK_CWD_FILTER);
+    return new RegExp(pattern);
   } catch {
     return { test: () => false };
   }
@@ -112,8 +113,11 @@ function cwdInsideProject(cwd, slug) {
   return isInside(resolved, root) || isInside(realOrSelf(resolved), realOrSelf(root));
 }
 
-function armForSession(sessionId, treatFraction) {
-  const digest = crypto.createHash("sha256").update(`murphys-recall|${sessionId}`).digest();
+// The arm salt changed with the 0.3 rename ("muphys-recall" before). An
+// experiment config in a legacy home keeps the old salt so in-flight
+// experiments are not re-randomized; experiment.json may pin "salt".
+function armForSession(sessionId, treatFraction, salt) {
+  const digest = crypto.createHash("sha256").update(`${salt}|${sessionId}`).digest();
   return digest.readUInt32BE(0) / 0xffffffff < treatFraction ? "treat" : "control";
 }
 
@@ -138,7 +142,8 @@ function main() {
     const exp = JSON.parse(core.readText(EXPERIMENT_PATH));
     if (exp.enabled === false) return;
     if (exp.mode === "session-randomized") {
-      arm = armForSession(sessionId, typeof exp.treatFraction === "number" ? exp.treatFraction : 0.5);
+      const salt = typeof exp.salt === "string" && exp.salt ? exp.salt : (core.LEGACY_HOME ? "muphys-recall" : "murphys-recall");
+      arm = armForSession(sessionId, typeof exp.treatFraction === "number" ? exp.treatFraction : 0.5, salt);
     }
   } catch { /* no experiment file = always treat */ }
 

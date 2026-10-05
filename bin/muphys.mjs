@@ -56,6 +56,7 @@ function fail(message) {
 }
 
 const args = parseArgs(rest);
+if (command && command !== "mcp") core.printMigrationNoticeOnce(); // the MCP server prints its own
 
 function outcomeRollup() {
   // Per-lesson effectiveness from the apply log: the funnel's last hop,
@@ -430,7 +431,7 @@ switch (command) {
     for (const name of ["readRegister", "scoreLessonForQuery", "normalizeSearchText", "callTool"]) {
       if (typeof core[name] !== "function") issues.push(`runtime missing export ${name} — wrong or stale checkout?`);
     }
-    const injLog = path.resolve(process.env.MURPHYS_INJECTION_LOG || path.join(core.MURPHYS_HOME, "injections.jsonl"));
+    const injLog = core.INJECTIONS_JSONL;
     if (!fs.existsSync(injLog)) {
       // Only alarm if the hook appears MOUNTED somewhere — a fresh install
       // with no hook yet is healthy, not broken.
@@ -454,14 +455,15 @@ switch (command) {
       }
     }
     const unreviewed = rows.filter((lesson) => lesson.status === "unreviewed").length;
-    out({ register: { total: rows.length, active: core.activeLessons().length, unreviewed, duplicateIdLines, unparseableLines: unparseable.length }, issues, ok: issues.length === 0 });
+    const notes = core.migrationNotice() ? [core.migrationNotice()] : [];
+    out({ home: core.MURPHYS_HOME, register: { total: rows.length, active: core.activeLessons().length, unreviewed, duplicateIdLines, unparseableLines: unparseable.length }, issues, notes, ok: issues.length === 0 });
     process.exit(issues.length ? 1 : 0);
     break;
   }
 
   case "stats": {
     const count = (file) => core.readJsonlRecords(file).length;
-    const injectionLog = path.resolve(process.env.MURPHYS_INJECTION_LOG || path.join(core.MURPHYS_HOME, "injections.jsonl"));
+    const injectionLog = core.INJECTIONS_JSONL;
     const { totals, perLesson } = outcomeRollup();
     const result = {
       home: core.MURPHYS_HOME,
