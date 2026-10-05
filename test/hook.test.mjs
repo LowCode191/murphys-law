@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOOK = path.join(HERE, "..", "hooks", "lessons-recall-hook.mjs");
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-hook-test-"));
+after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 
 function runHook(payload, env = {}) {
   return execFileSync("node", [HOOK], {

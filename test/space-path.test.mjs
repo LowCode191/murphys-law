@@ -2,7 +2,7 @@
 // containing spaces ("My Projects", most Windows homes). The original code
 // used new URL(import.meta.url).pathname, which yields %20 and crashes at
 // top-level import — OUTSIDE the hook's fail-open try/catch.
-import { test, before } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,6 +13,10 @@ import { fileURLToPath } from "node:url";
 const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SPACED = fs.mkdtempSync(path.join(os.tmpdir(), "murphys space test-"));
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-space-home-"));
+after(() => {
+  fs.rmSync(SPACED, { recursive: true, force: true });
+  fs.rmSync(HOME, { recursive: true, force: true });
+});
 
 before(() => {
   for (const dir of ["lib", "hooks", "bin"]) {

@@ -1,5 +1,5 @@
 // Regressions for the pre-release practitioner review findings.
-import { test, before } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,7 +8,19 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
-const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-hardening-"));
+// Every temp home this file creates is removed after the last test — a
+// suite that leaks one directory per test per run fills shared temp dirs.
+const TEMP_DIRS = [];
+function tempDir(prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  TEMP_DIRS.push(dir);
+  return dir;
+}
+after(() => {
+  for (const dir of TEMP_DIRS) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+const HOME = tempDir("murphys-hardening-");
 process.env.MURPHYS_HOME = HOME;
 
 const require = createRequire(import.meta.url);
@@ -136,7 +148,7 @@ test("dedupe: exact non-Latin duplicates ARE grouped (byte-identical tier)", asy
 });
 
 test("sync: concurrent runs against a STALE lock never write duplicate ids", async () => {
-  const raceHome = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-race-"));
+  const raceHome = tempDir("murphys-race-");
   fs.writeFileSync(path.join(raceHome, "projects.json"), JSON.stringify({ projects: [{ slug: "race", root: raceHome }] }));
   fs.writeFileSync(path.join(raceHome, "LESSONS-LEARNED.jsonl"),
     JSON.stringify({ title: "Race lesson one", description: "First lesson for the race test." }) + "\n" +
@@ -264,7 +276,7 @@ test("round 7: separator-dash variants are review candidates, never auto-retired
 // ---------------------------------------------------------------------------
 
 test("round 7: --apply retires only byte-identical duplicates; every semantic near-match survives", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-r7-"));
+  const home = tempDir("murphys-r7-");
   const seed = [
     // (1) composite-key delimiter injection
     { title: "a|b", description: "c" },
@@ -321,7 +333,7 @@ test("round 7: --apply retires only byte-identical duplicates; every semantic ne
 });
 
 test("round 7: sync content ids are delimiter-proof (a|b + c ≠ a + b|c)", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-r7sync-"));
+  const home = tempDir("murphys-r7sync-");
   fs.writeFileSync(path.join(home, "projects.json"), JSON.stringify({ projects: [{ slug: "inj", root: home }] }));
   fs.writeFileSync(path.join(home, "LESSONS-LEARNED.jsonl"),
     JSON.stringify({ title: "a|b", description: "c" }) + "\n" +
@@ -333,7 +345,7 @@ test("round 7: sync content ids are delimiter-proof (a|b + c ≠ a + b|c)", asyn
 });
 
 test("round 7.2: non-string content is never judged — coercion is a lossy transform", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-r72-"));
+  const home = tempDir("murphys-r72-");
   // Out-of-contract rows appended directly to the file, as a legacy migration
   // or manual edit could: no writer in this package produces these.
   const rows = [
@@ -353,7 +365,7 @@ test("round 7.2: non-string content is never judged — coercion is a lossy tran
 });
 
 test("round 7.2: candidates reflect the post-plan register and carry usable member objects", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-r72c-"));
+  const home = tempDir("murphys-r72c-");
   const env = { ...process.env, MURPHYS_HOME: home };
   // A and A2 are byte-identical (one will retire); B is fold-equal only.
   execFileSync("node", [CLI, "add", "--title", "Restart rule —", "--description", "Drain before restart.", "--date", "2026-01-01"], { env, encoding: "utf8" });
@@ -375,7 +387,7 @@ test("round 7.2: candidates reflect the post-plan register and carry usable memb
 });
 
 test("round 7.3: reader collapses duplicate-id lines (first wins) and dedupe never self-retires them", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-r73-"));
+  const home = tempDir("murphys-r73-");
   const rowX = JSON.stringify({ id: "llp-dupline00001", title: "Synced lesson", description: "Body of the synced lesson.", status: "active" });
   const rowY = JSON.stringify({ id: "llg-distinct0001", title: "Other lesson", description: "A different body entirely.", status: "active" });
   fs.writeFileSync(path.join(home, "lessons.jsonl"), rowX + "\n" + rowX + "\n" + rowY + "\n");
@@ -390,7 +402,7 @@ test("round 7.3: reader collapses duplicate-id lines (first wins) and dedupe nev
 });
 
 test("round 7.3: divergent same-id lines are a doctor issue — the reader is masking data", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-r73d-"));
+  const home = tempDir("murphys-r73d-");
   const first = JSON.stringify({ id: "llg-divergent001", title: "First version", description: "The first body.", status: "active" });
   const second = JSON.stringify({ id: "llg-divergent001", title: "Second version", description: "A conflicting body.", status: "active" });
   fs.writeFileSync(path.join(home, "lessons.jsonl"), first + "\n" + second + "\n");
@@ -411,13 +423,13 @@ test("round 7.3: divergent same-id lines are a doctor issue — the reader is ma
 });
 
 test("round 7.4: sync rows are pure functions of source content — two syncs, byte-identical registers", async () => {
-  const source = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-r74src-"));
+  const source = tempDir("murphys-r74src-");
   fs.writeFileSync(path.join(source, "LESSONS-LEARNED.jsonl"),
     JSON.stringify({ title: "Dated lesson", description: "Has a source date.", date: "2026-03-04" }) + "\n" +
     JSON.stringify({ title: "Undated lesson", description: "No date in the source row." }) + "\n");
   const registers = [];
   for (const label of ["a", "b"]) {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), `murphys-r74${label}-`));
+    const home = tempDir(`murphys-r74${label}-`);
     fs.writeFileSync(path.join(home, "projects.json"), JSON.stringify({ projects: [{ slug: "det", root: source }] }));
     execFileSync("node", [CLI, "sync"], { env: { ...process.env, MURPHYS_HOME: home }, encoding: "utf8" });
     registers.push(fs.readFileSync(path.join(home, "lessons.jsonl"), "utf8"));
@@ -432,7 +444,7 @@ test("round 7.4: sync rows are pure functions of source content — two syncs, b
 });
 
 test("round 7.4: a live foreign lock is respected AND survives the run — no blind unlock", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-r74lock-"));
+  const home = tempDir("murphys-r74lock-");
   fs.writeFileSync(path.join(home, "projects.json"), JSON.stringify({ projects: [{ slug: "lk", root: home }] }));
   fs.writeFileSync(path.join(home, "LESSONS-LEARNED.jsonl"),
     JSON.stringify({ title: "Lock test lesson", description: "Body for the lock test." }) + "\n");
@@ -449,7 +461,7 @@ test("round 7.4: a live foreign lock is respected AND survives the run — no bl
 test("round 7.4: doctor's liveness alarm is scoped to THIS install's hook path", async () => {
   const hookPath = path.join(HERE, "..", "hooks", "lessons-recall-hook.mjs");
   // Foreign checkout mounted (same basename, different path): no alarm.
-  const homeForeign = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-r74docf-"));
+  const homeForeign = tempDir("murphys-r74docf-");
   fs.mkdirSync(path.join(homeForeign, ".claude"), { recursive: true });
   fs.writeFileSync(path.join(homeForeign, ".claude", "settings.json"),
     JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "node /some/other/checkout/hooks/lessons-recall-hook.mjs" }] }] } }));
@@ -457,7 +469,7 @@ test("round 7.4: doctor's liveness alarm is scoped to THIS install's hook path",
     { env: { ...process.env, MURPHYS_HOME: homeForeign, HOME: homeForeign }, encoding: "utf8" }));
   assert.equal(okOut.ok, true, "another install's hook logs to ITS home — alarming here is a false positive");
   // THIS install mounted, no injection log: alarm.
-  const homeMine = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-r74docm-"));
+  const homeMine = tempDir("murphys-r74docm-");
   fs.mkdirSync(path.join(homeMine, ".claude"), { recursive: true });
   fs.writeFileSync(path.join(homeMine, ".claude", "settings.json"),
     JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: `node ${hookPath}` }] }] } }));

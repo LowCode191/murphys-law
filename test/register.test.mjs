@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 // Point the core at a throwaway home BEFORE requiring it.
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "murphys-test-"));
 process.env.MURPHYS_HOME = HOME;
+after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 
 const require = createRequire(import.meta.url);
 const core = require("../lib/register.cjs");

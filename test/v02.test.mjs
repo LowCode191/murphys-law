@@ -1,6 +1,6 @@
 // v0.2 features: npx-mountable MCP subcommand, outcome analytics, and the
 // optional embedding retriever (hybrid ranking, fail-open, cached).
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -12,9 +12,16 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(HERE, "..", "bin", "muphys.mjs");
 
+// Every temp home this file creates is removed after the last test.
+const TEMP_DIRS = [];
 function freshHome(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  TEMP_DIRS.push(dir);
+  return dir;
 }
+after(() => {
+  for (const dir of TEMP_DIRS) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 // Async CLI runner. execFileSync blocks this process's event loop — and the
 // fake embeddings endpoint lives in THIS process, so a sync child would
