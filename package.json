@@ -28,11 +28,11 @@
     "assets/banner.svg"
   ],
   "scripts": {
-    "test": "node --test \"test/*.test.mjs\"",
+    "test": "node --test",
     "mcp": "node lib/register.cjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "keywords": [
     "ai-agents",

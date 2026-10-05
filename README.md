@@ -259,7 +259,7 @@ run the eval against your own fleet, we'd love the numbers either way.
 
 v0.1.0. Extracted from a production multi-agent deployment (9 agents, ~340
 lessons, several months) where every design rule above was learned by
-violating it first. No external dependencies; Node ≥ 20.
+violating it first. No external dependencies; Node ≥ 22.
 
 ## Related projects
 
