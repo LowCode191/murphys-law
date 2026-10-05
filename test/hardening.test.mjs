@@ -451,7 +451,7 @@ test("round 7.4: a live foreign lock is respected AND survives the run — no bl
   const lockPath = path.join(home, ".lessons.jsonl.lock");
   // This test process's pid IS alive — the sync child must treat the lock as
   // held, skip, and leave the file untouched.
-  const foreign = JSON.stringify({ pid: process.pid, ts: "2026-01-01T00:00:00Z" });
+  const foreign = JSON.stringify({ pid: process.pid, ts: new Date().toISOString() });
   fs.writeFileSync(lockPath, foreign);
   const outRaw = execFileSync("node", [CLI, "sync"], { env: { ...process.env, MURPHYS_HOME: home }, encoding: "utf8" });
   assert.equal(JSON.parse(outRaw).skipped, true, "a live holder is never displaced");

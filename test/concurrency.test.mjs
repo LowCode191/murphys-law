@@ -111,3 +111,38 @@ test("supersede respects a held register lock", () => {
   assert.notEqual(run.status, 0);
   assert.ok(fs.readFileSync(path.join(home, "lessons.jsonl"), "utf8").includes('"id":"llg-a","title":"A","description":"a","status":"active"'), "no rewrite under someone else's lock");
 });
+
+// ---------------------------------------------------------------------------
+// Stale locks: liveness is pid AND age. A crashed writer's lock whose pid was
+// later reused by an unrelated live process used to block sync forever,
+// reported as skipped with exit 0.
+// ---------------------------------------------------------------------------
+
+function seedProject(home) {
+  const project = path.join(home, "proj");
+  fs.mkdirSync(project);
+  fs.writeFileSync(path.join(home, "projects.json"), JSON.stringify({ projects: [{ slug: "lk", root: project }] }));
+  fs.writeFileSync(path.join(project, "LESSONS-LEARNED.jsonl"), JSON.stringify({ title: "Lock age lesson", description: "Lands once the stale lock is reaped." }) + "\n");
+}
+
+test("an old lock naming a live (reused) pid is expired by age and reaped", () => {
+  const home = freshHome();
+  seedProject(home);
+  // process.pid is alive — exactly the pid-reuse shape — but the lock is a year old.
+  fs.writeFileSync(lockPathFor(home), JSON.stringify({ pid: process.pid, ts: "2025-01-01T00:00:00Z", token: "crashed-writer" }));
+  const result = JSON.parse(execFileSync("node", [CLI, "sync"], { env: envFor(home), encoding: "utf8" }));
+  assert.equal(result.skipped, undefined, "an expired lock must not block sync forever");
+  assert.equal(result.totalAppended, 1);
+  assert.ok(!fs.existsSync(lockPathFor(home)), "the expired lock is gone and ours was released");
+});
+
+test("a fresh lock whose pid exists but is not signalable (EPERM) counts as live", () => {
+  const home = freshHome();
+  seedProject(home);
+  // pid 1 always exists; an unprivileged kill(1, 0) fails with EPERM, which
+  // means "alive, not yours" — never "dead".
+  fs.writeFileSync(lockPathFor(home), JSON.stringify({ pid: 1, ts: new Date().toISOString(), token: "other-user" }));
+  const result = JSON.parse(execFileSync("node", [CLI, "sync"], { env: envFor(home), encoding: "utf8" }));
+  assert.equal(result.skipped, true, "a live holder owned by another user is never reaped");
+  assert.equal(JSON.parse(fs.readFileSync(lockPathFor(home), "utf8")).token, "other-user");
+});
