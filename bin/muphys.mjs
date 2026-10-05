@@ -276,9 +276,15 @@ switch (command) {
         if (blank) continue;
         row.scanned += 1;
         if (!entry) { row.invalid += 1; continue; }
-        const title = typeof entry.title === "string" ? entry.title.trim().slice(0, 300) : "";
-        const description = typeof entry.description === "string" ? entry.description.trim().slice(0, 8000) : "";
+        const fullTitle = typeof entry.title === "string" ? entry.title.trim() : "";
+        const fullDescription = typeof entry.description === "string" ? entry.description.trim() : "";
+        // The id basis stays the capped text earlier releases hashed, so a
+        // re-sync after upgrading never re-imports long rows under new ids;
+        // the stored text says explicitly that it was cut.
+        const title = fullTitle.slice(0, 300);
+        const description = fullDescription.slice(0, 8000);
         if (!title || !description) { row.invalid += 1; continue; }
+        const truncated = fullTitle.length > title.length || fullDescription.length > description.length;
         // Structural JSON-tuple hash basis: with a bare "|" join, title "a|b" +
         // desc "c" collides with title "a" + desc "b|c" — the second lesson
         // inherits the first's id and silently never syncs.
@@ -301,8 +307,9 @@ switch (command) {
           id,
           author: typeof entry.author === "string" && entry.author.trim() ? entry.author.trim().slice(0, 64) : slug,
           ...(date ? { timestamp: `${date}T12:00:00` } : {}),
-          title,
-          description,
+          title: fullTitle.length > title.length ? `${title} …[truncated]` : title,
+          description: fullDescription.length > description.length ? `${description} …[truncated]` : description,
+          ...(truncated ? { truncated: true } : {}),
           evidence: Array.isArray(entry.evidence) ? entry.evidence.filter(Boolean).map(String).slice(0, 20) : [],
           tags: [...new Set([...(Array.isArray(entry.tags) ? entry.tags.filter(Boolean).map(String) : []), slug])].slice(0, 20),
           scope: `project:${slug}`,
