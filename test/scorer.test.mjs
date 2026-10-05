@@ -73,3 +73,58 @@ test("stopwords are not search terms; plural forms still match", () => {
   const lesson = { title: "Adding a skill must preserve the whole whitelist", description: "Always write the complete list.", tags: [] };
   assert.ok(core.scoreLessonForQuery(lesson, "skills whitelists", []) >= 4, "skills/skill and whitelists/whitelist are the same term");
 });
+
+// ---------------------------------------------------------------------------
+// Unicode tokenization + honest argumentless handling. Non-Latin text used to
+// normalize to nothing, and a non-empty query with no usable terms fell into
+// the argumentless branch: the newest 8 lessons at score 1, logged as a real
+// retrieval.
+// ---------------------------------------------------------------------------
+
+function unicodeHome() {
+  const home = freshHome("murphys-unicode-");
+  const rows = [
+    { id: "llg-ja", title: "本番環境では必ずバックアップを取る", description: "本番の変更前にバックアップ。", status: "active", timestamp: "2026-01-01T12:00:00" },
+    { id: "llg-ko", title: "배포 전에 백업을 확인하라", description: "백업이 없으면 배포하지 않는다.", status: "active", timestamp: "2026-01-02T12:00:00" },
+    { id: "llg-ru", title: "Проверяйте развертывание в продакшене", description: "Развертывание не завершено, пока не проверено.", status: "active", timestamp: "2026-01-03T12:00:00" },
+    { id: "llg-nfd", title: "Cafe\u0301 rule", description: "The cafe\u0301 rule body.", status: "active", timestamp: "2026-01-04T12:00:00" },
+    { id: "llg-en", title: "Unrelated English lesson", description: "Rotate logs weekly.", status: "active", timestamp: "2026-09-01T12:00:00" },
+  ];
+  fs.writeFileSync(path.join(home, "lessons.jsonl"), rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  return home;
+}
+
+function queryIn(home, query) {
+  const cli = path.join(HERE, "..", "bin", "muphys.mjs");
+  const result = JSON.parse(execFileSync("node", [cli, "query", ...(query ? [query] : [])], { env: { ...process.env, MURPHYS_HOME: home }, encoding: "utf8" }));
+  const log = fs.readFileSync(path.join(home, "queries.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)).pop();
+  return { result, log };
+}
+
+test("non-Latin queries match non-Latin lessons, and only them", () => {
+  const home = unicodeHome();
+  for (const [query, id] of [["本番環境 バックアップ", "llg-ja"], ["백업 확인", "llg-ko"], ["развертывание продакшене", "llg-ru"]]) {
+    const { result } = queryIn(home, query);
+    assert.equal(result.lessons[0]?.id, id, `${query} → ${id}`);
+    assert.ok(result.lessons[0].score > 1, "a real match, not the argumentless fallback");
+    assert.ok(!result.lessons.some((l) => l.id === "llg-en"), "unrelated lessons are not returned");
+  }
+});
+
+test("canonically equivalent text matches (NFC query, NFD lesson)", () => {
+  const { result } = queryIn(unicodeHome(), "caf\u00e9");
+  assert.equal(result.lessons[0]?.id, "llg-nfd", "precomposed \u00e9 in the query matches e + combining acute in the lesson");
+});
+
+test("a non-empty query with no usable terms returns nothing and is not logged as argumentless", () => {
+  const home = unicodeHome();
+  const stopwords = queryIn(home, "the the the");
+  assert.equal(stopwords.result.count, 0, "no arbitrary 'newest 8' fallback");
+  assert.equal(stopwords.log.argumentless, false);
+  assert.equal(stopwords.log.terms, 0);
+  const shortTokens = queryIn(home, "CI DB");
+  assert.equal(shortTokens.result.count, 0, "no lesson mentions CI or DB");
+  const empty = queryIn(home, "");
+  assert.equal(empty.log.argumentless, true);
+  assert.equal(empty.result.count, 5, "a truly argumentless query still lists recent lessons");
+});
