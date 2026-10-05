@@ -237,7 +237,7 @@ test("apply dedupes repeated lesson ids: one event counts once, doctor stays qui
 });
 
 test("garbage vectors fail the hybrid pass open and are never cached", async () => {
-  // Didact's probe: a wrong-length vector mixed in with real ones. The old
+  // Reviewer's probe: a wrong-length vector mixed in with real ones. The old
   // Math.min truncation scored it cosine 1.0; batch dimension-consistency
   // now fails the whole pass open. (A backend returning uniformly
   // degenerate-but-consistent vectors is indistinguishable in shape from a
