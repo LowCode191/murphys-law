@@ -60,24 +60,19 @@ function outcomeRollup() {
   // finally read instead of only written.
   const perLesson = new Map();
   const totals = { applies: 0, worked: 0, partial: 0, failed: 0, unknown: 0, unspecified: 0 };
-  if (fs.existsSync(core.USAGE_JSONL)) {
-    for (const line of fs.readFileSync(core.USAGE_JSONL, "utf8").split("\n")) {
-      if (!line.trim()) continue;
-      let row;
-      try { row = JSON.parse(line); } catch { continue; }
-      if (!Array.isArray(row.lessonIds)) continue;
-      const outcome = typeof row.outcome === "string" && ["worked", "partial", "failed", "unknown"].includes(row.outcome) ? row.outcome : "unspecified";
-      totals.applies += 1;
-      totals[outcome] += 1;
-      // Read-side dedupe mirrors the write-side one: legacy or hand-written
-      // usage rows with repeated ids still count once per event.
-      for (const id of new Set(row.lessonIds)) {
-        if (typeof id !== "string") continue;
-        if (!perLesson.has(id)) perLesson.set(id, { id, applies: 0, worked: 0, partial: 0, failed: 0, unknown: 0, unspecified: 0 });
-        const bucket = perLesson.get(id);
-        bucket.applies += 1;
-        bucket[outcome] += 1;
-      }
+  for (const row of core.readJsonlRecords(core.USAGE_JSONL)) {
+    if (!Array.isArray(row.lessonIds)) continue;
+    const outcome = typeof row.outcome === "string" && ["worked", "partial", "failed", "unknown"].includes(row.outcome) ? row.outcome : "unspecified";
+    totals.applies += 1;
+    totals[outcome] += 1;
+    // Read-side dedupe mirrors the write-side one: legacy or hand-written
+    // usage rows with repeated ids still count once per event.
+    for (const id of new Set(row.lessonIds)) {
+      if (typeof id !== "string") continue;
+      if (!perLesson.has(id)) perLesson.set(id, { id, applies: 0, worked: 0, partial: 0, failed: 0, unknown: 0, unspecified: 0 });
+      const bucket = perLesson.get(id);
+      bucket.applies += 1;
+      bucket[outcome] += 1;
     }
   }
   return { totals, perLesson };
@@ -239,10 +234,11 @@ switch (command) {
     // Content-derived ids (llp-<sha1 of the [slug,title,description] JSON tuple>) make re-runs
     // idempotent with no checkpoint state; the register is append-only here.
     let registry;
+    if (!fs.existsSync(core.PROJECTS_JSON)) fail(`no project registry at ${core.PROJECTS_JSON} — see data/projects.example.json`);
     try {
-      registry = JSON.parse(fs.readFileSync(core.PROJECTS_JSON, "utf8"));
-    } catch {
-      fail(`no project registry at ${core.PROJECTS_JSON} — see data/projects.example.json`);
+      registry = JSON.parse(core.readText(core.PROJECTS_JSON));
+    } catch (error) {
+      fail(`project registry at ${core.PROJECTS_JSON} is not valid JSON: ${error.message}`);
     }
     const projects = (registry.projects || []).filter((project) => project && project.slug && project.root);
     const existing = new Set(core.readRegister().map((l) => l.id));
@@ -263,20 +259,18 @@ switch (command) {
         const realRoot = fs.realpathSync(root);
         if (realFile !== realRoot && !realFile.startsWith(realRoot + path.sep)) { row.error = "symlink escape refused"; continue; }
       } catch { continue; }
-      const lines = fs.readFileSync(realFile, "utf8").split("\n");
-      lines.forEach((line, index) => {
-        if (!line.trim()) return;
+      for (const { index, blank, record: entry } of core.parseJsonlLines(core.readText(realFile))) {
+        if (blank) continue;
         row.scanned += 1;
-        let entry;
-        try { entry = JSON.parse(line); } catch { row.invalid += 1; return; }
+        if (!entry) { row.invalid += 1; continue; }
         const title = typeof entry.title === "string" ? entry.title.trim().slice(0, 300) : "";
         const description = typeof entry.description === "string" ? entry.description.trim().slice(0, 8000) : "";
-        if (!title || !description) { row.invalid += 1; return; }
+        if (!title || !description) { row.invalid += 1; continue; }
         // Structural JSON-tuple hash basis: with a bare "|" join, title "a|b" +
         // desc "c" collides with title "a" + desc "b|c" — the second lesson
         // inherits the first's id and silently never syncs.
         const id = "llp-" + crypto.createHash("sha1").update(JSON.stringify([slug, title, description])).digest("hex").slice(0, 12);
-        if (existing.has(id)) { row.duplicates += 1; return; }
+        if (existing.has(id)) { row.duplicates += 1; continue; }
         existing.add(id);
         // The durable row is a PURE FUNCTION of source content (slug + line
         // content + line position): no wall clock rides in it, so a raced
@@ -304,7 +298,7 @@ switch (command) {
           source: `project-sync:${slug}#L${index + 1}`,
         }));
         row.appended += 1;
-      });
+      }
     }
     if (args["dry-run"] !== true && toAppend.length) {
       // Single-writer lock — best-effort serialization, NOT the correctness
@@ -379,10 +373,7 @@ switch (command) {
         // Re-check ids under the lock — the racing sync may have won.
         const current = new Set(core.readRegister().map((l) => l.id));
         const stillNew = toAppend.filter((line) => !current.has(JSON.parse(line).id));
-        if (stillNew.length) {
-          fs.mkdirSync(path.dirname(core.REGISTER_JSONL), { recursive: true });
-          fs.appendFileSync(core.REGISTER_JSONL, stillNew.join("\n") + "\n", { mode: 0o600 });
-        }
+        if (stillNew.length) core.appendLine(core.REGISTER_JSONL, stillNew.join("\n"));
         out({ dryRun: false, totalAppended: stillNew.length, syncedAt: now, projects: summary });
       } finally {
         // Ownership-proved release: remove the lock only if it provably
@@ -415,27 +406,29 @@ switch (command) {
     // broken — this is the external assertion that catches that.
     const issues = [];
     const rows = core.readRegister();
-    const withoutExplicitId = fs.existsSync(core.REGISTER_JSONL)
-      ? fs.readFileSync(core.REGISTER_JSONL, "utf8").split("\n").filter((l) => l.trim()).filter((l) => { try { return !JSON.parse(l).id; } catch { return false; } }).length
-      : 0;
+    const lines = fs.existsSync(core.REGISTER_JSONL) ? core.parseJsonlLines(core.readText(core.REGISTER_JSONL)) : [];
+    // Unparseable lines (torn writes, hand edits, non-object JSON) are
+    // skipped by every reader — whatever they held is invisible to queries
+    // and the hook, so they fail the check rather than hide.
+    const unparseable = lines.filter((entry) => entry.invalid);
+    if (unparseable.length) {
+      issues.push(`${unparseable.length} unparseable register line(s) (first at line ${unparseable[0].index + 1}) — readers skip them, so whatever they held is invisible; repair the register file`);
+    }
+    const withoutExplicitId = lines.filter((entry) => entry.record && (typeof entry.record.id !== "string" || !entry.record.id.trim())).length;
     if (withoutExplicitId > 0) issues.push(`${withoutExplicitId} register rows lack an explicit id — run writers from this package only`);
     // Duplicate-id LINES: benign when byte-identical (concurrent-sync
     // artifact; the reader collapses them, first wins) — reported as a
     // count. DIVERGENT same-id lines mean the reader is masking real data
     // and a curator must repair the file: that is an issue.
     let duplicateIdLines = 0;
-    if (fs.existsSync(core.REGISTER_JSONL)) {
-      const firstLineById = new Map();
-      for (const line of fs.readFileSync(core.REGISTER_JSONL, "utf8").split("\n")) {
-        if (!line.trim()) continue;
-        let rowId;
-        try { rowId = JSON.parse(line).id; } catch { continue; }
-        if (typeof rowId !== "string" || !rowId) continue;
-        if (!firstLineById.has(rowId)) { firstLineById.set(rowId, line); continue; }
-        duplicateIdLines += 1;
-        if (firstLineById.get(rowId) !== line) {
-          issues.push(`divergent duplicate-id lines for ${rowId} — the reader keeps the FIRST and is masking the rest; repair the register file`);
-        }
+    const firstLineById = new Map();
+    for (const entry of lines) {
+      const rowId = entry.record?.id;
+      if (typeof rowId !== "string" || !rowId) continue;
+      if (!firstLineById.has(rowId)) { firstLineById.set(rowId, entry.line.trim()); continue; }
+      duplicateIdLines += 1;
+      if (firstLineById.get(rowId) !== entry.line.trim()) {
+        issues.push(`divergent duplicate-id lines for ${rowId} — the reader keeps the FIRST and is masking the rest; repair the register file`);
       }
     }
     for (const lesson of rows) {
@@ -485,13 +478,13 @@ switch (command) {
         issues.push(`hook is mounted but no injection log exists at ${injLog} — it has never fired. Verify by EFFECT: send a real prompt and watch this file. Reading settings back proves nothing (some harnesses never load the scope you installed into).`);
       }
     }
-    out({ register: { total: rows.length, active: core.activeLessons().length, duplicateIdLines }, issues, ok: issues.length === 0 });
+    out({ register: { total: rows.length, active: core.activeLessons().length, duplicateIdLines, unparseableLines: unparseable.length }, issues, ok: issues.length === 0 });
     process.exit(issues.length ? 1 : 0);
     break;
   }
 
   case "stats": {
-    const count = (file) => (fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter((l) => l.trim()).length : 0);
+    const count = (file) => core.readJsonlRecords(file).length;
     const injectionLog = path.resolve(process.env.MURPHYS_INJECTION_LOG || path.join(core.MURPHYS_HOME, "injections.jsonl"));
     const { totals, perLesson } = outcomeRollup();
     const result = {
@@ -507,14 +500,9 @@ switch (command) {
       // Injection counts per lesson, joined with apply outcomes: the funnel
       // (deliver -> apply -> outcome) as one table per lesson.
       const injectedByLesson = new Map();
-      if (fs.existsSync(injectionLog)) {
-        for (const line of fs.readFileSync(injectionLog, "utf8").split("\n")) {
-          if (!line.trim()) continue;
-          let row;
-          try { row = JSON.parse(line); } catch { continue; }
-          for (const hit of Array.isArray(row.lessons) ? row.lessons : []) {
-            if (hit && typeof hit.id === "string") injectedByLesson.set(hit.id, (injectedByLesson.get(hit.id) || 0) + 1);
-          }
+      for (const row of core.readJsonlRecords(injectionLog)) {
+        for (const hit of Array.isArray(row.lessons) ? row.lessons : []) {
+          if (hit && typeof hit.id === "string") injectedByLesson.set(hit.id, (injectedByLesson.get(hit.id) || 0) + 1);
         }
       }
       const titles = new Map(core.readRegister().map((l) => [l.id, { title: l.title || null, status: l.status || "active" }]));

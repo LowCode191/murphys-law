@@ -96,7 +96,7 @@ function main() {
   let arm = "treat";
   const sessionId = String(payload.session_id || "unknown").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64) || "unknown";
   try {
-    const exp = JSON.parse(fs.readFileSync(EXPERIMENT_PATH, "utf8"));
+    const exp = JSON.parse(core.readText(EXPERIMENT_PATH));
     if (exp.enabled === false) return;
     if (exp.mode === "session-randomized") {
       arm = armForSession(sessionId, typeof exp.treatFraction === "number" ? exp.treatFraction : 0.5);
@@ -140,7 +140,7 @@ function main() {
   // degrade to sane values, never to a reset cap or a crashed dedupe.
   let state = { injectedIds: [], injectionEvents: 0 };
   try {
-    const raw = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    const raw = JSON.parse(core.readText(statePath));
     state = {
       injectedIds: Array.isArray(raw.injectedIds) ? raw.injectedIds.filter((x) => typeof x === "string").slice(-100) : [],
       injectionEvents: Number.isFinite(Number(raw.injectionEvents)) ? Math.max(0, Number(raw.injectionEvents)) : 0,
@@ -184,7 +184,7 @@ function main() {
   // Funnel log — both arms log identically; a control record is the
   // counterfactual "what treatment would have delivered here".
   try {
-    fs.appendFileSync(INJECTION_LOG, JSON.stringify({
+    core.appendLine(INJECTION_LOG, JSON.stringify({
       id: `inj-${crypto.randomUUID()}`,
       ts: new Date().toISOString(),
       arm,
@@ -193,7 +193,7 @@ function main() {
       cwd: cwd || null,
       promptChars: prompt.length,
       lessons: fresh.map(({ lesson, score, matchedTerms }, i) => ({ id: lesson.id, rank: i + 1, score, matchedTerms })),
-    }) + "\n", { mode: 0o600 });
+    }));
   } catch { /* telemetry only */ }
 
   try {
