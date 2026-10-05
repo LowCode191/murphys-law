@@ -187,7 +187,7 @@ Two honest notes from our production telemetry:
 const { activeLessons, scoreLessonForQuery } = require("murphys-law/lib/register.cjs");
 const hits = activeLessons()
   .map((l) => ({ l, s: scoreLessonForQuery(l, userPrompt, []) }))
-  .filter((x) => x.s >= 12)
+  .filter((x) => x.s >= 8)
   .sort((a, b) => b.s - a.s)
   .slice(0, 3);
 // prepend a clearly-labeled background block built from `hits` — copy the

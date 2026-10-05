@@ -51,7 +51,7 @@ const INJECTION_LOG = path.resolve(process.env.MURPHYS_INJECTION_LOG || path.joi
 const EXPERIMENT_PATH = path.join(MURPHYS_HOME, "experiment.json");
 
 // Gate policy (hook-side; the scorer itself is shared with lessons_query).
-const MIN_SCORE = Number(process.env.MURPHYS_HOOK_MIN_SCORE || 12);
+const MIN_SCORE = Number(process.env.MURPHYS_HOOK_MIN_SCORE || 8);
 const MIN_TERMS = Number(process.env.MURPHYS_HOOK_MIN_TERMS || 3);
 const MAX_LESSONS = 3;
 const MAX_BLOCK_CHARS = 1400;
@@ -103,21 +103,23 @@ function main() {
     }
   } catch { /* no experiment file = always treat */ }
 
-  const promptTerms = new Set(core.normalizeSearchText(prompt).split(/\s+/).filter((t) => t.length > 2));
+  // Distinct whole-token content terms (stopwords excluded) — the same terms
+  // the scorer matches on.
+  const promptTerms = core.searchTerms(prompt);
   if (promptTerms.size < MIN_TERMS) return;
 
   const scored = [];
   for (const lesson of core.activeLessons()) {
     const score = core.scoreLessonForQuery(lesson, prompt, []);
     if (score < MIN_SCORE) continue;
-    const haystack = core.normalizeSearchText([
+    const lessonTerms = core.searchTerms([
       lesson.title,
       lesson.description,
       Array.isArray(lesson.tags) ? lesson.tags.join(" ") : "",
     ].join(" "));
     let matchedTerms = 0;
     for (const term of promptTerms) {
-      if (haystack.includes(term)) matchedTerms += 1;
+      if (lessonTerms.has(term)) matchedTerms += 1;
     }
     if (matchedTerms < MIN_TERMS) continue;
     scored.push({ lesson, score, matchedTerms });
