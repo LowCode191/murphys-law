@@ -1,0 +1,33 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: npm test (isolated TMPDIR)
+        run: |
+          export TMPDIR="$(mktemp -d)"
+          npm test
+          # The suite must clean up after itself.
+          leftovers="$(ls -A "$TMPDIR" | grep -v '^node-compile-cache$' || true)"
+          if [ -n "$leftovers" ]; then
+            echo "tests left temp files behind:"; echo "$leftovers"; exit 1
+          fi
+      - name: package contents
+        run: npm pack --dry-run
