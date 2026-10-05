@@ -205,7 +205,7 @@ switch (command) {
   }
 
   case "dedupe": {
-    // Two tiers, because dedupe is DESTRUCTIVE under --apply and six review
+    // Two tiers, because dedupe is DESTRUCTIVE under --apply and seven review
     // rounds proved a theorem about lossy transforms on a destructive path:
     // enumeration of their failure modes never terminates. Every stripped
     // character class created a false-merge (ASCII folding ate non-Latin

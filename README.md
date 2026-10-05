@@ -13,11 +13,13 @@ Same with agents: most failures that look like bad luck fire the same way
 every time, for a reason. This register catches the mechanism the first time
 it fires — so the toast lands butter-side up from then on.
 
-*(This project shipped its first release under a misspelled name — "Muphys
-Law." For a tool about mistakes becoming institutional memory, that was
-almost too fitting; see [Muphry's law](https://en.wikipedia.org/wiki/Muphry%27s_law).
-We renamed it. The lesson is logged — see the register's own
-[sample lessons](data/sample-lessons.jsonl).)*
+*(This project shipped its first two releases, 0.1.0 and 0.2.0, under a
+misspelled name — "Muphys Law." For a tool about mistakes becoming
+institutional memory, that was almost too fitting; see
+[Muphry's law](https://en.wikipedia.org/wiki/Muphry%27s_law). We renamed it
+in 0.3.0. The lesson is logged — see the register's own
+[sample lessons](data/sample-lessons.jsonl) — and upgrading from the old name
+is covered in [Migrating from muphys-law](#migrating-from-muphys-law).)*
 
 Agents repeat each other's mistakes. Murphys Law is the smallest system we
 found that actually changes that: an append-only register of operational
@@ -57,10 +59,12 @@ data licenses:
 - **Known weak link: retrieval.** The built-in scorer is lexical; on our
   24-probe golden set it surfaces the expected lesson in the top 3 only
   10/24 times. The optional embedding backend (below) lifts that to 14/24
-  top-3 and 16/24 top-8 — measured on this exact implementation against a
-  local qwen3-embedding backend. The push hook compensates by scoring full
-  prompts rather than short queries, but if you improve one thing, improve
-  retrieval further — and re-run the eval.
+  top-3 and 16/24 top-8 — measured against a local qwen3-embedding backend
+  on the 0.2/0.3 implementation. 0.4.0 changed the lexical scorer (distinct
+  whole-token terms, stopwords, Unicode tokenization; see the
+  [changelog](CHANGELOG.md)) and has **not** been re-measured. The push hook
+  compensates by scoring full prompts rather than short queries, but if you
+  improve one thing, improve retrieval further — and re-run the eval.
 
 ## Quickstart (5 minutes)
 
@@ -77,6 +81,9 @@ node bin/muphys.mjs query "confirm the fix is live in production"
 # capture your first lesson
 node bin/muphys.mjs add --title "..." --description "..." --tags ops
 ```
+
+(Installed from npm, the same CLI is `murphys`; the file keeps its pre-rename
+name, `bin/muphys.mjs`, so existing configs keep working.)
 
 ### The recall hook (the part that actually changes behavior)
 
@@ -149,10 +156,11 @@ export MURPHYS_EMBEDDINGS_MODEL=nomic-embed-text
 Unset = pure lexical, exactly as before. Design constraints, in order:
 **fail-open** (any backend error or timeout falls back to lexical ranks and
 records why in the query log — retrieval must never make the register
-unavailable); **cached** (vectors persist per-model in
-`~/.murphys/embeddings-cache.jsonl`, so the register embeds once, not per
-query); and **the hook stays lexical-only by design** — the prompt path never
-waits on a network call. Every query-log row now records which retriever
+unavailable); **cached** (lesson vectors persist in
+`~/.murphys/embeddings-cache.jsonl`, keyed by endpoint, model and vector
+dimension, so the register embeds once per backend; query vectors are never
+persisted); and **the hook stays lexical-only by design** — the prompt path
+never waits on a network call. Every query-log row now records which retriever
 answered (`retriever: lexical|hybrid`), so you can measure the difference on
 your own traffic.
 
@@ -277,11 +285,63 @@ ceiling effects, transcript races, hand-transcribed provenance tables), and
 how to read small-n results without lying to yourself. If you adopt this and
 run the eval against your own fleet, we'd love the numbers either way.
 
+## Configuration
+
+Every path and setting is an environment variable; defaults live under the
+data home. Pre-0.3 `MUPHYS_*` names are still read as fallbacks (the
+`MURPHYS_*` name wins when both are set).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MURPHYS_HOME` | `~/.murphys` (or `~/.muphys`, see below) | data home for everything below |
+| `MURPHYS_REGISTER` | `$MURPHYS_HOME/lessons.jsonl` | the register |
+| `MURPHYS_USAGE_LOG` | `$MURPHYS_HOME/usage.jsonl` | `lessons_apply` events + outcomes |
+| `MURPHYS_CANDIDATES` | `$MURPHYS_HOME/candidates.jsonl` | `lessons_candidate` intake |
+| `MURPHYS_QUERY_LOG` | `$MURPHYS_HOME/queries.jsonl` | every query, ranks and scores |
+| `MURPHYS_INJECTION_LOG` | `$MURPHYS_HOME/injections.jsonl` | every hook decision (both arms) |
+| `MURPHYS_PROJECTS` | `$MURPHYS_HOME/projects.json` | project roots for `sync` |
+| `MURPHYS_HOOK_MIN_SCORE` | `8` | hook gate: minimum lexical score |
+| `MURPHYS_HOOK_MIN_TERMS` | `3` | hook gate: minimum distinct matching terms |
+| `MURPHYS_HOOK_CWD_FILTER` | unset | regex; hook fires only for matching session cwds |
+| `MURPHYS_EMBEDDINGS_URL` / `_MODEL` | unset | enable hybrid retrieval (both required) |
+| `MURPHYS_EMBEDDINGS_API_KEY` | unset | bearer token for the embeddings endpoint |
+| `MURPHYS_EMBEDDINGS_TIMEOUT_MS` | `4000` | per-request embeddings timeout |
+| `MURPHYS_LOCK_WAIT_MS` | `15000` | how long writers wait for the register lock |
+| `MURPHYS_LOCK_STALE_MS` | `600000` | age after which a held lock counts as stale |
+| `DEBUG` | unset | `1` prints stack traces on CLI errors |
+
+A non-numeric value for a numeric setting falls back to its default with a
+warning. The experiment file (`$MURPHYS_HOME/experiment.json`) takes
+`enabled`, `mode: "session-randomized"`, `treatFraction` and an optional
+`salt`.
+
+### Migrating from muphys-law
+
+Releases up to 0.2.0 were published as `muphys-law`, with `MUPHYS_*`
+variables and a `~/.muphys` home. From 0.4.0:
+
+- `MUPHYS_*` variables keep working as fallbacks; rename them to `MURPHYS_*`
+  at your convenience.
+- If `~/.murphys` holds no register but `~/.muphys` does (and no home is set
+  explicitly), `~/.muphys` is used. Nothing is moved or deleted; the CLI and
+  the MCP server print a one-time notice, and `murphys doctor` lists it under
+  `notes`. To finish migrating, move the directory yourself:
+  `mv ~/.muphys ~/.murphys`.
+- Session-randomized experiments whose config lives in the legacy home keep
+  their pre-rename arm assignment. If you move the home mid-experiment, add
+  `"salt": "muphys-recall"` to `experiment.json` to keep it.
+- The library export `MUPHYS_HOME` remains as a deprecated alias of
+  `MURPHYS_HOME`.
+
+(0.3.0 renamed everything without these fallbacks; if you upgraded to it,
+0.4.0 picks your `~/.muphys` register back up.)
+
 ## Status
 
-v0.1.0. Extracted from a production multi-agent deployment (9 agents, ~340
-lessons, several months) where every design rule above was learned by
-violating it first. No external dependencies; Node ≥ 22.
+v0.4.0 — see the [changelog](CHANGELOG.md). Extracted from a production
+multi-agent deployment (9 agents, ~340 lessons, several months) where every
+design rule above was learned by violating it first. No external
+dependencies; Node ≥ 22.
 
 ## Related projects
 
