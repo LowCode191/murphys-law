@@ -26,10 +26,12 @@ after(() => {
 });
 
 // A child environment with no MURPHYS_* / MUPHYS_* inherited from the
-// developer's shell, and HOME pointing at a throwaway directory.
+// developer's shell, HOME pointing at a throwaway directory, and colour off:
+// a terminal that exports FORCE_COLOR makes `console.log(true)` print ANSI
+// escapes, which broke exact-output assertions.
 function envWith(home, extra = {}) {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^MU(R)?PHYS_/.test(key)));
-  return { ...env, HOME: home, ...extra };
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^MU(R)?PHYS_/.test(key) && key !== "FORCE_COLOR"));
+  return { ...env, NO_COLOR: "1", HOME: home, ...extra };
 }
 
 function legacyHome() {
@@ -68,13 +70,13 @@ test("MUPHYS_* variables are fallbacks; MURPHYS_* wins when both are set", () =>
   const current = freshDir();
   const both = JSON.parse(execFileSync("node", [CLI, "stats"], { env: envWith(home, { MUPHYS_HOME: path.join(legacyData, ".muphys"), MURPHYS_HOME: current }), encoding: "utf8" }));
   assert.equal(both.home, current);
-  const enabled = execFileSync("node", ["-e", `console.log(require(${JSON.stringify(LIB)}).embeddingsEnabled())`],
+  const enabled = execFileSync("node", ["-e", `console.log(String(require(${JSON.stringify(LIB)}).embeddingsEnabled()))`],
     { env: envWith(home, { MURPHYS_HOME: current, MUPHYS_EMBEDDINGS_URL: "http://127.0.0.1:1/v1/embeddings", MUPHYS_EMBEDDINGS_MODEL: "m" }), encoding: "utf8" });
   assert.equal(enabled.trim(), "true", "legacy embedding settings still enable hybrid retrieval");
 });
 
 test("library users keep the pre-0.3 MUPHYS_HOME export", () => {
-  const out = execFileSync("node", ["-e", `const c = require(${JSON.stringify(LIB)}); console.log(c.MUPHYS_HOME === c.MURPHYS_HOME)`], { env: envWith(freshDir(), { MURPHYS_HOME: freshDir() }), encoding: "utf8" });
+  const out = execFileSync("node", ["-e", `const c = require(${JSON.stringify(LIB)}); console.log(String(c.MUPHYS_HOME === c.MURPHYS_HOME))`], { env: envWith(freshDir(), { MURPHYS_HOME: freshDir() }), encoding: "utf8" });
   assert.equal(out.trim(), "true");
 });
 
